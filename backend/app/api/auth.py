@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
-from app.core.database import get_db
+from app.core.database import get_db, SessionLocal
 from app.core.deps import get_current_user
 from app.models.user import User
 from app.core.config import settings
+from app.services.email import send_welcome_email
 from pydantic import BaseModel
 from typing import Optional
 import re
@@ -30,8 +31,25 @@ class EmailVerifyResponse(BaseModel):
     autocorrect: str
     message: str
 
+def handle_welcome_email(user_id: str, email: str, name: str):
+    db = SessionLocal()
+    try:
+        db_user = db.query(User).filter(User.id == user_id).first()
+        if db_user and not db_user.welcome_email_sent:
+            success = send_welcome_email(to_email=email, name=name)
+            if success:
+                db_user.welcome_email_sent = True
+                db.commit()
+    except Exception as e:
+        db.rollback()
+        import logging
+        logging.getLogger(__name__).error(f"Error in welcome email background task: {str(e)}")
+    finally:
+        db.close()
+
 @router.get("/me", response_model=UserResponse)
 async def get_me(
+    background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -57,6 +75,14 @@ async def get_me(
                 detail=f"Database synchronization error: {str(e)}"
             )
             
+    if not db_user.welcome_email_sent:
+        background_tasks.add_task(
+            handle_welcome_email,
+            user_id=db_user.id,
+            email=db_user.email,
+            name=db_user.name
+        )
+
     return db_user
 
 @router.post("/verify-email", response_model=EmailVerifyResponse)

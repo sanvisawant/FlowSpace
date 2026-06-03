@@ -9,3 +9,4 @@ pydantic-ai>=0.0.18
 langgraph>=0.0.30
 anthropic>=0.21.0
 psycopg2-binary>=2.9.9
+resend
